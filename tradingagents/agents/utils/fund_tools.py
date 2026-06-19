@@ -4,7 +4,11 @@ from typing import Annotated
 
 from langchain_core.tools import tool
 
-from tradingagents.dataflows.cn_fund import get_fund_nav, get_fund_overview
+from tradingagents.dataflows.cn_fund import (
+    get_etf_overview,
+    get_fund_nav,
+    get_fund_overview,
+)
 
 
 @tool
@@ -26,3 +30,13 @@ def get_fund_overview_data(
     company, manager, scale, benchmark, strategy, asset allocation, top holdings
     and fees. Use this instead of company fundamentals for funds."""
     return get_fund_overview(symbol)
+
+
+@tool
+def get_etf_overview_data(
+    symbol: Annotated[str, "ETF code, e.g. 510300"],
+) -> str:
+    """Composition of a China ETF: name + tracked index, unit NAV vs market price
+    (premium/discount) and top constituent holdings. Use this for ETF fundamentals
+    (its intraday price/technicals come from the stock OHLCV tools)."""
+    return get_etf_overview(symbol)

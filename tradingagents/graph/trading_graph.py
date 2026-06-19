@@ -28,6 +28,7 @@ from tradingagents.agents.utils.agent_utils import (
     resolve_instrument_identity,
 )
 from tradingagents.agents.utils.fund_tools import (
+    get_etf_overview_data,
     get_fund_nav_data,
     get_fund_overview_data,
 )
@@ -204,6 +205,7 @@ class TradingAgentsGraph:
                     get_income_statement,
                     # Fund/ETF composition (used when asset_type is fund/etf).
                     get_fund_overview_data,
+                    get_etf_overview_data,
                 ]
             ),
         }
@@ -323,12 +325,17 @@ class TradingAgentsGraph:
         path and the CLI call this so the resolved identity reaches the whole
         graph regardless of entry point.
         """
-        # Funds/ETFs aren't single companies; resolve the fund's real name (so
-        # every agent anchors to it) rather than the stock-oriented identity.
-        if asset_type in ("fund", "etf"):
+        # Funds/ETFs aren't single companies; resolve the real name (so every
+        # agent anchors to it) rather than the stock-oriented identity. Open-end
+        # funds via Xueqiu; ETFs via Baostock (its name carries the index).
+        if asset_type == "fund":
             from tradingagents.dataflows.cn_fund import fund_identity
 
             identity = fund_identity(ticker)
+        elif asset_type == "etf":
+            from tradingagents.dataflows.china import cn_identity
+
+            identity = cn_identity(ticker)
         else:
             identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)

@@ -188,13 +188,19 @@ def build_instrument_context(
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
         )
-    if asset_type in ("fund", "etf"):
-        kind = "exchange-traded fund (ETF)" if asset_type == "etf" else "open-end fund"
+    if asset_type == "fund":
         context += (
-            f" Treat it as a China {kind} quoted by daily NAV in CNY, not a single "
-            "company: analyze it by its NAV trend/risk and what it holds (asset "
-            "allocation, top holdings, sector tilt, strategy, fees, manager, vs its "
-            "benchmark) — not single-company fundamentals."
+            " Treat it as a China open-end fund quoted by daily NAV in CNY, not a "
+            "single company: analyze it by its NAV trend/risk and what it holds "
+            "(asset allocation, top holdings, sector tilt, strategy, fees, manager, "
+            "vs its benchmark) — not single-company fundamentals."
+        )
+    elif asset_type == "etf":
+        context += (
+            " Treat it as a China ETF: it trades intraday at a market price in CNY "
+            "(so price/technical analysis applies) and tracks an index — analyze it "
+            "by its price trend AND what it tracks/holds (the index, top "
+            "constituents, premium/discount to NAV), not single-company fundamentals."
         )
     return context
 

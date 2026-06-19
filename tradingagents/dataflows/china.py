@@ -44,9 +44,13 @@ def is_cn_a_share(symbol) -> bool:
 
 
 def _exchange(code: str) -> str:
-    """Baostock/Tushare exchange for an A-share code (Shanghai/Shenzhen/Beijing)."""
+    """Baostock/Tushare exchange for a CN code (Shanghai/Shenzhen/Beijing).
+
+    Covers stocks and exchange-traded funds: Shanghai 5/6/9 (incl. 50/51/56/58
+    ETF/LOF), Shenzhen 0/1/2/3 (incl. 15/16/18 ETF/LOF), Beijing 4/8.
+    """
     head = code[0]
-    if head in "69":
+    if head in "569":
         return "sh"
     if head in "0123":
         return "sz"

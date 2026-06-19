@@ -110,6 +110,63 @@ def get_fund_nav(symbol: str, start_date: str | None = None, end_date: str | Non
     )
 
 
+def get_etf_overview(symbol: str) -> str:
+    """ETF composition: name + tracked index, NAV vs market price (premium/
+    discount), and top constituent holdings. ETFs trade intraday, so their price
+    technicals come from the stock OHLCV path; this covers the fund-side facts."""
+    import akshare as ak
+
+    from .china import _baostock_df, bare_code, cn_identity
+
+    code = bare_code(symbol)
+    ident = cn_identity(code)
+    name = ident.get("company_name", "")
+    lines = [f"# ETF overview for {code} (China exchange-traded fund)\n", "## 基本信息"]
+    if name:
+        lines.append(f"- 名称: {name}")
+        lines.append("- 跟踪标的: 见名称所含指数（如沪深300、中证500、创业板等）")
+
+    # Premium/discount = market close vs unit NAV (both latest available).
+    last_nav = last_close = None
+    try:
+        nav_df = _nav_df(code)
+        last_nav = float(nav_df["nav"].iloc[-1])
+        nav_date = nav_df["date"].iloc[-1].strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001
+        nav_date = ""
+    try:
+        end = dt.date.today().isoformat()
+        start = (dt.date.today() - dt.timedelta(days=20)).isoformat()
+        px = _baostock_df(code, start, end)
+        last_close = float(px["Close"].iloc[-1])
+    except Exception:  # noqa: BLE001
+        pass
+    if last_nav is not None:
+        lines.append(f"- 最新单位净值: {last_nav:.4f}（{nav_date}）")
+    if last_close is not None:
+        lines.append(f"- 最新收盘价: {last_close:.4f}")
+    if last_nav and last_close:
+        prem = (last_close - last_nav) / last_nav * 100
+        lines.append(f"- 溢价/折价率: {prem:+.2f}%（正为溢价，负为折价）")
+
+    # Top constituents (the ETF's holdings track its index).
+    hold = None
+    for year in (_latest_fiscal_year(), str(int(_latest_fiscal_year()) - 1)):
+        try:
+            h = ak.fund_portfolio_hold_em(symbol=code, date=year)
+            if h is not None and not h.empty and "股票代码" in h.columns:
+                hold = h
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    if hold is not None:
+        cols = [c for c in ["股票代码", "股票名称", "占净值比例"] if c in hold.columns]
+        lines.append("\n## 前十大成分股")
+        lines.append(hold.head(10)[cols].to_markdown(index=False))
+
+    return "\n".join(lines) + "\n"
+
+
 def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> str:
     """Recent news for the fund's top holdings — a fund's near-term sentiment is
     driven by what it owns. Yahoo/StockTwits/Reddit don't cover CN funds, so this

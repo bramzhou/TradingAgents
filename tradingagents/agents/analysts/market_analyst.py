@@ -58,8 +58,9 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
             + cn_analyst_guidance("market", state["company_of_interest"])
         )
 
-        # Funds/ETFs are analyzed by NAV, not stock OHLCV/indicators.
-        if state.get("asset_type", "stock") in ("fund", "etf"):
+        # Open-end funds are analyzed by NAV (no intraday price). ETFs trade
+        # intraday, so they keep the stock OHLCV/indicator path above.
+        if state.get("asset_type", "stock") == "fund":
             tools = [get_fund_nav_data]
             system_message = FUND_MARKET_SYSTEM + get_language_instruction()
 

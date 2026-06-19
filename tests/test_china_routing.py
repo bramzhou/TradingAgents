@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from tradingagents.dataflows import interface
-from tradingagents.dataflows.china import bare_code, is_cn_a_share
+from tradingagents.dataflows.china import _exchange, bare_code, is_cn_a_share
 from tradingagents.dataflows.config import set_config
 
 
@@ -19,6 +19,16 @@ class CnDetectionTests(unittest.TestCase):
         self.assertEqual(bare_code("600519.SH"), "600519")
         self.assertEqual(bare_code("000001.sz"), "000001")
         self.assertEqual(bare_code("600519"), "600519")
+
+    def test_exchange_covers_stocks_and_etfs(self):
+        # Stocks
+        self.assertEqual(_exchange("600519"), "sh")
+        self.assertEqual(_exchange("000001"), "sz")
+        self.assertEqual(_exchange("300750"), "sz")
+        # ETFs/LOFs: Shanghai 5x, Shenzhen 15x/16x
+        self.assertEqual(_exchange("510300"), "sh")
+        self.assertEqual(_exchange("588000"), "sh")
+        self.assertEqual(_exchange("159915"), "sz")
 
 
 class CnRoutingTests(unittest.TestCase):
