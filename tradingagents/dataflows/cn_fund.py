@@ -10,12 +10,32 @@ fund codes are 6 digits and collide with A-share stock codes.
 
 from __future__ import annotations
 
+import concurrent.futures
 import datetime as dt
+import functools
 import math
 
 import pandas as pd
 
 from .errors import NoMarketDataError
+
+# AKShare endpoints occasionally hang indefinitely for some funds (no socket
+# timeout of their own), which would stall the whole analyst run. Cap each call.
+_AK_TIMEOUT = 30  # seconds
+
+
+def _t(call, label: str = "akshare call"):
+    """Run a blocking akshare call with a hard wall-clock timeout, raising
+    ``TimeoutError`` (callers degrade to a sentinel) instead of hanging. The
+    worker thread is abandoned, not awaited, so a hung request can't block us."""
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(call)
+    try:
+        return fut.result(timeout=_AK_TIMEOUT)
+    except concurrent.futures.TimeoutError as e:
+        raise TimeoutError(f"{label} timed out after {_AK_TIMEOUT}s") from e
+    finally:
+        ex.shutdown(wait=False)
 
 
 def _latest_fiscal_year() -> str:
@@ -24,16 +44,48 @@ def _latest_fiscal_year() -> str:
     return str(dt.date.today().year)
 
 
+@functools.lru_cache(maxsize=1)
+def _fund_list() -> pd.DataFrame:
+    import akshare as ak
+
+    return _t(lambda: ak.fund_name_em(), "fund_name_em")
+
+
+def fund_name_type(symbol: str) -> tuple[str, str]:
+    """(short name, category) from the full fund directory — a fallback when the
+    per-fund Xueqiu profile endpoint doesn't cover a fund. The list is large, so
+    it is fetched once and cached for the process."""
+    from .china import bare_code
+
+    try:
+        d = _fund_list()
+        row = d[d["基金代码"].astype(str) == bare_code(symbol)]
+        if not row.empty:
+            r = row.iloc[0]
+            return str(r.get("基金简称", "") or "").strip(), str(r.get("基金类型", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return "", ""
+
+
 def fund_identity(symbol: str) -> dict:
     """Best-effort fund identity (name, company, category) so every agent anchors
     to the real fund instead of hallucinating one. Returns ``{}`` on failure."""
+    info = {}
     try:
         import akshare as ak
 
-        basic = ak.fund_individual_basic_info_xq(symbol)
+        basic = _t(lambda: ak.fund_individual_basic_info_xq(symbol), "fund_individual_basic_info_xq")
         info = dict(zip(basic["item"], basic["value"]))
     except Exception:  # noqa: BLE001 — never block the run on identity lookup
-        return {}
+        info = {}
+    # Fall back to the fund directory for name/category when the profile is thin.
+    if not str(info.get("基金名称", "") or "").strip():
+        name, category = fund_name_type(symbol)
+        if name:
+            info["基金名称"] = name
+        if category and not str(info.get("基金类型", "") or "").strip():
+            info["基金类型"] = category
     out = {}
     name = str(info.get("基金名称", "") or "").strip()
     if name:
@@ -50,7 +102,7 @@ def fund_identity(symbol: str) -> dict:
 def _nav_df(symbol: str) -> pd.DataFrame:
     import akshare as ak
 
-    d = ak.fund_open_fund_info_em(symbol, indicator="单位净值走势")
+    d = _t(lambda: ak.fund_open_fund_info_em(symbol, indicator="单位净值走势"), "fund_open_fund_info_em")
     if d is None or d.empty or "单位净值" not in d.columns:
         raise NoMarketDataError(symbol, symbol, "akshare: no NAV history")
     d = d.rename(columns={"净值日期": "date", "单位净值": "nav"})[["date", "nav"]]
@@ -153,7 +205,7 @@ def get_etf_overview(symbol: str) -> str:
     hold = None
     for year in (_latest_fiscal_year(), str(int(_latest_fiscal_year()) - 1)):
         try:
-            h = ak.fund_portfolio_hold_em(symbol=code, date=year)
+            h = _t(lambda: ak.fund_portfolio_hold_em(symbol=code, date=year), "fund_portfolio_hold_em")
             if h is not None and not h.empty and "股票代码" in h.columns:
                 hold = h
                 break
@@ -178,7 +230,7 @@ def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> s
     hold = None
     for year in (_latest_fiscal_year(), str(int(_latest_fiscal_year()) - 1)):
         try:
-            h = ak.fund_portfolio_hold_em(symbol=symbol, date=year)
+            h = _t(lambda: ak.fund_portfolio_hold_em(symbol=symbol, date=year), "fund_portfolio_hold_em")
             if h is not None and not h.empty and "股票代码" in h.columns:
                 hold = h
                 break
@@ -194,7 +246,7 @@ def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> s
         weight = r.get("占净值比例", "")
         lines = [f"### {name}（{code}）占净值 {weight}%"]
         try:
-            d = ak.stock_news_em(symbol=code)
+            d = _t(lambda: ak.stock_news_em(symbol=code), "stock_news_em")
             if d is not None and not d.empty and "新闻标题" in d.columns:
                 for _, n in d.head(per_stock).iterrows():
                     when = str(n.get("发布时间", "")).strip()
@@ -215,28 +267,48 @@ def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> s
 
 
 def get_fund_overview(symbol: str) -> str:
-    """Fund identity + strategy + fees + asset allocation + top holdings."""
+    """Fund identity + strategy + fees + asset allocation + top holdings.
+
+    Each section is best-effort: the Xueqiu profile endpoint doesn't cover every
+    fund (and can raise internally), so we degrade to whatever is available
+    rather than failing — a raised tool would loop the analyst."""
     import akshare as ak
 
-    basic = ak.fund_individual_basic_info_xq(symbol)
-    if basic is None or basic.empty:
-        raise NoMarketDataError(symbol, symbol, "akshare: no fund profile")
-    info = dict(zip(basic["item"], basic["value"]))
+    info = {}
+    try:
+        basic = _t(lambda: ak.fund_individual_basic_info_xq(symbol), "fund_individual_basic_info_xq")
+        if basic is not None and not basic.empty:
+            info = dict(zip(basic["item"], basic["value"]))
+    except Exception:  # noqa: BLE001 — profile endpoint thin/unavailable for some funds
+        info = {}
 
-    lines = [f"# Fund overview for {symbol} (China open-end fund)\n"]
+    lines = [f"# Fund overview for {symbol} (China open-end fund)\n", "## 基本信息"]
     profile_keys = [
         "基金名称", "基金全称", "基金类型", "基金公司", "基金经理", "成立时间",
         "最新规模", "基金评级", "业绩比较基准", "投资目标", "投资策略",
     ]
-    lines.append("## 基本信息")
+    has_profile = False
     for k in profile_keys:
         v = info.get(k)
         if v not in (None, "") and not (isinstance(v, float) and pd.isna(v)):
             lines.append(f"- {k}: {str(v).strip()}")
+            has_profile = True
+    if not has_profile:
+        # The Xueqiu profile is thin for some funds; fall back to the directory
+        # for at least the name and category.
+        name, category = fund_name_type(symbol)
+        if name:
+            lines.append(f"- 基金名称: {name}")
+        if category:
+            lines.append(f"- 基金类型: {category}")
+        lines.append("- （该基金的详细档案暂不可用，请基于下方持仓与配置分析）")
 
     # Asset allocation (stocks / bonds / cash / other).
     try:
-        alloc = ak.fund_individual_detail_hold_xq(symbol, date=_latest_fiscal_year())
+        alloc = _t(
+            lambda: ak.fund_individual_detail_hold_xq(symbol, date=_latest_fiscal_year()),
+            "fund_individual_detail_hold_xq",
+        )
         if alloc is not None and not alloc.empty:
             lines.append("\n## 资产配置")
             lines.append(alloc.to_markdown(index=False))
@@ -245,7 +317,10 @@ def get_fund_overview(symbol: str) -> str:
 
     # Top stock holdings.
     try:
-        hold = ak.fund_portfolio_hold_em(symbol, date=_latest_fiscal_year())
+        hold = _t(
+            lambda: ak.fund_portfolio_hold_em(symbol, date=_latest_fiscal_year()),
+            "fund_portfolio_hold_em",
+        )
         if hold is not None and not hold.empty:
             cols = [c for c in ["股票代码", "股票名称", "占净值比例", "持仓市值"] if c in hold.columns]
             lines.append("\n## 前十大重仓股")
@@ -255,7 +330,7 @@ def get_fund_overview(symbol: str) -> str:
 
     # Fees.
     try:
-        fees = ak.fund_individual_detail_info_xq(symbol)
+        fees = _t(lambda: ak.fund_individual_detail_info_xq(symbol), "fund_individual_detail_info_xq")
         if fees is not None and not fees.empty:
             lines.append("\n## 费用")
             lines.append(fees.to_markdown(index=False))

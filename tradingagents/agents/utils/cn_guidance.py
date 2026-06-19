@@ -124,6 +124,15 @@ ETF_FUNDAMENTALS_SYSTEM = """你是一位专业的ETF研究分析师，请基于
 请给出投资建议（买入/持有/卖出），并在结尾附上 Markdown 表格总结跟踪指数、溢价折价与重点成分股。
 注意：ETF 在二级市场盘中交易，技术面分析见技术分析师的价格分析报告。"""
 
+# Appended to a single-tool (fund/ETF) analyst's prompt once its tool has already
+# returned: tells the model to write the report now instead of re-requesting data
+# (which, with tools unbound, would otherwise leak as raw tool-call text).
+FINALIZE_DIRECTIVE = (
+    "\n\n⚠️ 重要：你已获得所需的全部数据与统计指标（净值/持仓等）。"
+    "请立即据此撰写完整的中文分析报告，直接输出报告正文。"
+    "不要再调用任何工具，也不要请求或等待更多数据——现有数据已足够完成分析。"
+)
+
 FUND_SENTIMENT_NOTE = """
 
 【基金情绪分析说明】本标的为中国公募基金，境外社交平台（StockTwits/Reddit）不覆盖且易返回错配噪声，已略过。

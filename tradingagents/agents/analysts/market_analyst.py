@@ -6,8 +6,13 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_stock_data,
     get_verified_market_snapshot,
+    single_tool_finalized,
 )
-from tradingagents.agents.utils.cn_guidance import FUND_MARKET_SYSTEM, cn_analyst_guidance
+from tradingagents.agents.utils.cn_guidance import (
+    FINALIZE_DIRECTIVE,
+    FUND_MARKET_SYSTEM,
+    cn_analyst_guidance,
+)
 from tradingagents.agents.utils.fund_tools import get_fund_nav_data
 
 
@@ -60,9 +65,15 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
 
         # Open-end funds are analyzed by NAV (no intraday price). ETFs trade
         # intraday, so they keep the stock OHLCV/indicator path above.
+        finalize = False
         if state.get("asset_type", "stock") == "fund":
             tools = [get_fund_nav_data]
             system_message = FUND_MARKET_SYSTEM + get_language_instruction()
+            # Once the lone NAV tool has returned, stop binding it and tell the
+            # model to write the report — otherwise it loops re-requesting data.
+            finalize = single_tool_finalized(state, single_tool=True)
+            if finalize:
+                system_message += FINALIZE_DIRECTIVE
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -86,7 +97,7 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
 
-        chain = prompt | llm.bind_tools(tools)
+        chain = prompt | (llm if finalize else llm.bind_tools(tools))
 
         result = chain.invoke(state["messages"])
 

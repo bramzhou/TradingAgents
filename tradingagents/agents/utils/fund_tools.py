@@ -11,6 +11,19 @@ from tradingagents.dataflows.cn_fund import (
 )
 
 
+def _safe(label: str, fn) -> str:
+    """Run a fund data fetch, returning an instructive sentinel on failure rather
+    than raising — a tool that raises makes the analyst retry it forever."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        return (
+            f"DATA_UNAVAILABLE: {label} could not be retrieved ({type(e).__name__}: {e}). "
+            "Treat it as unavailable and continue with whatever other data you have — "
+            "do not call this tool again."
+        )
+
+
 @tool
 def get_fund_nav_data(
     symbol: Annotated[str, "fund code, e.g. 014328"],
@@ -19,7 +32,7 @@ def get_fund_nav_data(
 ) -> str:
     """Daily NAV history for a China open-end fund, with total/annualized return,
     volatility and max-drawdown stats. Use this instead of stock OHLCV for funds."""
-    return get_fund_nav(symbol, start_date, end_date)
+    return _safe("fund NAV history", lambda: get_fund_nav(symbol, start_date, end_date))
 
 
 @tool
@@ -29,7 +42,7 @@ def get_fund_overview_data(
     """Composition and identity of a China open-end fund: name, type/category,
     company, manager, scale, benchmark, strategy, asset allocation, top holdings
     and fees. Use this instead of company fundamentals for funds."""
-    return get_fund_overview(symbol)
+    return _safe("fund overview", lambda: get_fund_overview(symbol))
 
 
 @tool
@@ -39,4 +52,4 @@ def get_etf_overview_data(
     """Composition of a China ETF: name + tracked index, unit NAV vs market price
     (premium/discount) and top constituent holdings. Use this for ETF fundamentals
     (its intraday price/technicals come from the stock OHLCV tools)."""
-    return get_etf_overview(symbol)
+    return _safe("ETF overview", lambda: get_etf_overview(symbol))

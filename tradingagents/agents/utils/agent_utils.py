@@ -124,6 +124,18 @@ def resolve_instrument_identity(ticker: str) -> dict:
     return identity
 
 
+def single_tool_finalized(state, *, single_tool: bool) -> bool:
+    """True for a single-tool analyst (fund/ETF NAV or overview) whose tool has
+    already returned. The caller then stops binding the tool AND tells the model
+    to finalize — otherwise it loops re-calling the lone tool, and (with the tool
+    unbound) leaks the would-be call as raw text into the report."""
+    from langchain_core.messages import ToolMessage
+
+    return single_tool and any(
+        isinstance(m, ToolMessage) for m in state.get("messages", [])
+    )
+
+
 def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",

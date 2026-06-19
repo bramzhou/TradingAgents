@@ -7,9 +7,11 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_instrument_context_from_state,
     get_language_instruction,
+    single_tool_finalized,
 )
 from tradingagents.agents.utils.cn_guidance import (
     ETF_FUNDAMENTALS_SYSTEM,
+    FINALIZE_DIRECTIVE,
     FUND_FUNDAMENTALS_SYSTEM,
     cn_analyst_guidance,
 )
@@ -39,12 +41,18 @@ def create_fundamentals_analyst(llm):
         # A fund/ETF's "fundamentals" are its holdings/strategy, not company
         # financials — funds by category/manager, ETFs by tracked index + premium.
         _atype = state.get("asset_type", "stock")
+        finalize = False
         if _atype == "fund":
             tools = [get_fund_overview_data]
             system_message = FUND_FUNDAMENTALS_SYSTEM + get_language_instruction()
         elif _atype == "etf":
             tools = [get_etf_overview_data]
             system_message = ETF_FUNDAMENTALS_SYSTEM + get_language_instruction()
+        if _atype in ("fund", "etf"):
+            # Once the lone overview tool has returned, finalize the report.
+            finalize = single_tool_finalized(state, single_tool=True)
+            if finalize:
+                system_message += FINALIZE_DIRECTIVE
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -68,7 +76,7 @@ def create_fundamentals_analyst(llm):
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
 
-        chain = prompt | llm.bind_tools(tools)
+        chain = prompt | (llm if finalize else llm.bind_tools(tools))
 
         result = chain.invoke(state["messages"])
 
