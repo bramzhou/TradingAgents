@@ -260,7 +260,11 @@ def get_akshare_news(ticker: str, start_date: str | None = None, end_date: str |
     import akshare as ak
 
     code = bare_code(ticker)
-    d = ak.stock_news_em(symbol=code)
+    try:
+        d = ak.stock_news_em(symbol=code)
+    except Exception as e:  # noqa: BLE001 — akshare raises internally (e.g. KeyError)
+        # when a code has no news (notably fund codes); degrade to "no data".
+        raise NoMarketDataError(code, code, f"akshare news unavailable: {e}") from e
     if d is None or d.empty or "新闻标题" not in d.columns:
         raise NoMarketDataError(code, code, "akshare: no news")
     if start_date and "发布时间" in d.columns:

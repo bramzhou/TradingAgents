@@ -27,6 +27,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     resolve_instrument_identity,
 )
+from tradingagents.agents.utils.fund_tools import (
+    get_fund_nav_data,
+    get_fund_overview_data,
+)
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
@@ -171,6 +175,8 @@ class TradingAgentsGraph:
                     # LLM and required by its prompt; must be executable here or
                     # the call fails and the model reports it "unavailable").
                     get_verified_market_snapshot,
+                    # Fund/ETF NAV (used when asset_type is fund/etf).
+                    get_fund_nav_data,
                 ]
             ),
             "social": ToolNode(
@@ -196,6 +202,8 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    # Fund/ETF composition (used when asset_type is fund/etf).
+                    get_fund_overview_data,
                 ]
             ),
         }
@@ -315,7 +323,14 @@ class TradingAgentsGraph:
         path and the CLI call this so the resolved identity reaches the whole
         graph regardless of entry point.
         """
-        identity = resolve_instrument_identity(ticker)
+        # Funds/ETFs aren't single companies; resolve the fund's real name (so
+        # every agent anchors to it) rather than the stock-oriented identity.
+        if asset_type in ("fund", "etf"):
+            from tradingagents.dataflows.cn_fund import fund_identity
+
+            identity = fund_identity(ticker)
+        else:
+            identity = resolve_instrument_identity(ticker)
         return build_instrument_context(ticker, asset_type, identity)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):

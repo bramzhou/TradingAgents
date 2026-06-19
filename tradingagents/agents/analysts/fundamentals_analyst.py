@@ -8,7 +8,8 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
-from tradingagents.agents.utils.cn_guidance import cn_analyst_guidance
+from tradingagents.agents.utils.cn_guidance import FUND_FUNDAMENTALS_SYSTEM, cn_analyst_guidance
+from tradingagents.agents.utils.fund_tools import get_fund_overview_data
 
 
 def create_fundamentals_analyst(llm):
@@ -30,6 +31,11 @@ def create_fundamentals_analyst(llm):
             + get_language_instruction()
             + cn_analyst_guidance("fundamentals", state["company_of_interest"]),
         )
+
+        # A fund's "fundamentals" are its holdings/strategy/fees, not company financials.
+        if state.get("asset_type", "stock") in ("fund", "etf"):
+            tools = [get_fund_overview_data]
+            system_message = FUND_FUNDAMENTALS_SYSTEM + get_language_instruction()
 
         prompt = ChatPromptTemplate.from_messages(
             [

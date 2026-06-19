@@ -7,7 +7,8 @@ from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
     get_verified_market_snapshot,
 )
-from tradingagents.agents.utils.cn_guidance import cn_analyst_guidance
+from tradingagents.agents.utils.cn_guidance import FUND_MARKET_SYSTEM, cn_analyst_guidance
+from tradingagents.agents.utils.fund_tools import get_fund_nav_data
 
 
 def create_market_analyst(llm):
@@ -56,6 +57,11 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
             + get_language_instruction()
             + cn_analyst_guidance("market", state["company_of_interest"])
         )
+
+        # Funds/ETFs are analyzed by NAV, not stock OHLCV/indicators.
+        if state.get("asset_type", "stock") in ("fund", "etf"):
+            tools = [get_fund_nav_data]
+            system_message = FUND_MARKET_SYSTEM + get_language_instruction()
 
         prompt = ChatPromptTemplate.from_messages(
             [

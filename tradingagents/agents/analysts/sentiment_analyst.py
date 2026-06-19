@@ -35,7 +35,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_language_instruction,
     get_news,
 )
-from tradingagents.agents.utils.cn_guidance import cn_analyst_guidance
+from tradingagents.agents.utils.cn_guidance import FUND_SENTIMENT_NOTE, cn_analyst_guidance
 from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
@@ -64,12 +64,25 @@ def create_sentiment_analyst(llm):
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
 
-        # Pre-fetch all three sources. Each fetcher degrades gracefully and
-        # returns a string (no exceptions surface from here), so the LLM
-        # always sees something — either real data or a clear placeholder.
-        news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
+        # A fund's sentiment is driven by what it holds; Yahoo/StockTwits/Reddit
+        # don't cover CN funds (and return mismatched-ticker noise), so use the
+        # top-holdings news instead and skip the US social sources.
+        if state.get("asset_type", "stock") in ("fund", "etf"):
+            from tradingagents.dataflows.cn_fund import get_fund_holdings_news
+
+            try:
+                news_block = get_fund_holdings_news(ticker)
+            except Exception:  # noqa: BLE001
+                news_block = "（暂无重仓股新闻）"
+            stocktwits_block = "(StockTwits 不覆盖中国公募基金，已略过以避免错配噪声。)"
+            reddit_block = "(Reddit 不覆盖中国公募基金，已略过。)"
+        else:
+            # Pre-fetch all three sources. Each fetcher degrades gracefully and
+            # returns a string (no exceptions surface from here), so the LLM
+            # always sees something — either real data or a clear placeholder.
+            news_block = get_news.func(ticker, start_date, end_date)
+            stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
+            reddit_block = fetch_reddit_posts(ticker)
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -79,6 +92,8 @@ def create_sentiment_analyst(llm):
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
         )
+        if state.get("asset_type", "stock") in ("fund", "etf"):
+            system_message += FUND_SENTIMENT_NOTE
 
         prompt = ChatPromptTemplate.from_messages(
             [

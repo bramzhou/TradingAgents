@@ -1,0 +1,208 @@
+"""China open-end fund data via AKShare (Xueqiu profile/fees/allocation,
+Eastmoney NAV + holdings).
+
+A fund is analyzed by what it owns and how its NAV behaves — not single-company
+fundamentals — so these helpers expose NAV history (with return/risk stats) and a
+composition overview (profile, manager, fees, asset allocation, top holdings).
+They are driven by ``asset_type`` (fund/etf), not symbol detection, because CN
+fund codes are 6 digits and collide with A-share stock codes.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import math
+
+import pandas as pd
+
+from .errors import NoMarketDataError
+
+
+def _latest_fiscal_year() -> str:
+    # Holdings/allocation are disclosed with a lag; the current or prior year
+    # is the safest query.
+    return str(dt.date.today().year)
+
+
+def fund_identity(symbol: str) -> dict:
+    """Best-effort fund identity (name, company, category) so every agent anchors
+    to the real fund instead of hallucinating one. Returns ``{}`` on failure."""
+    try:
+        import akshare as ak
+
+        basic = ak.fund_individual_basic_info_xq(symbol)
+        info = dict(zip(basic["item"], basic["value"]))
+    except Exception:  # noqa: BLE001 — never block the run on identity lookup
+        return {}
+    out = {}
+    name = str(info.get("基金名称", "") or "").strip()
+    if name:
+        out["name"] = name
+    company = str(info.get("基金公司", "") or "").strip()
+    if company:
+        out["company"] = company
+    category = str(info.get("基金类型", "") or "").strip()
+    if category:
+        out["category"] = category
+    return out
+
+
+def _nav_df(symbol: str) -> pd.DataFrame:
+    import akshare as ak
+
+    d = ak.fund_open_fund_info_em(symbol, indicator="单位净值走势")
+    if d is None or d.empty or "单位净值" not in d.columns:
+        raise NoMarketDataError(symbol, symbol, "akshare: no NAV history")
+    d = d.rename(columns={"净值日期": "date", "单位净值": "nav"})[["date", "nav"]]
+    d["date"] = pd.to_datetime(d["date"])
+    d["nav"] = pd.to_numeric(d["nav"], errors="coerce")
+    return d.dropna().sort_values("date").reset_index(drop=True)
+
+
+def _nav_stats(navs: list[float]) -> dict:
+    """Total/annualized return, annualized vol and max drawdown from a NAV series."""
+    if len(navs) < 2:
+        return {}
+    total = navs[-1] / navs[0] - 1
+    rets = [navs[i] / navs[i - 1] - 1 for i in range(1, len(navs))]
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1) if len(rets) > 1 else 0.0
+    vol = math.sqrt(var) * math.sqrt(252)
+    years = len(navs) / 252
+    annualized = (1 + total) ** (1 / years) - 1 if years > 0 else total
+    peak = navs[0]
+    mdd = 0.0
+    for v in navs:
+        peak = max(peak, v)
+        mdd = min(mdd, v / peak - 1)
+    return {
+        "total_return": total,
+        "annualized_return": annualized,
+        "annualized_volatility": vol,
+        "max_drawdown": mdd,
+    }
+
+
+def get_fund_nav(symbol: str, start_date: str | None = None, end_date: str | None = None) -> str:
+    """NAV history (recent rows) plus return/risk stats over the available series."""
+    df = _nav_df(symbol)
+    if start_date:
+        df = df[df["date"] >= pd.Timestamp(start_date)]
+    if end_date:
+        df = df[df["date"] <= pd.Timestamp(end_date)]
+    if df.empty:
+        raise NoMarketDataError(symbol, symbol, "akshare: no NAV in range")
+    navs = df["nav"].tolist()
+    s = _nav_stats(navs)
+    recent = df.tail(60).copy()
+    recent["date"] = recent["date"].dt.strftime("%Y-%m-%d")
+    stats = (
+        f"# Total return {s['total_return'] * 100:.1f}%, annualized {s['annualized_return'] * 100:.1f}%, "
+        f"volatility {s['annualized_volatility'] * 100:.1f}%, max drawdown {s['max_drawdown'] * 100:.1f}% "
+        f"(over {len(navs)} NAV points)\n"
+        if s else ""
+    )
+    return (
+        f"# NAV history for fund {symbol} (China open-end fund; unit NAV, amounts in CNY)\n"
+        f"{stats}"
+        f"# Showing the latest {len(recent)} of {len(df)} NAV points\n\n"
+        + recent.to_csv(index=False)
+    )
+
+
+def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> str:
+    """Recent news for the fund's top holdings — a fund's near-term sentiment is
+    driven by what it owns. Yahoo/StockTwits/Reddit don't cover CN funds, so this
+    is the meaningful sentiment signal for the sentiment analyst."""
+    import akshare as ak
+
+    from .china import bare_code
+
+    hold = None
+    for year in (_latest_fiscal_year(), str(int(_latest_fiscal_year()) - 1)):
+        try:
+            h = ak.fund_portfolio_hold_em(symbol=symbol, date=year)
+            if h is not None and not h.empty and "股票代码" in h.columns:
+                hold = h
+                break
+        except Exception:  # noqa: BLE001
+            continue
+    if hold is None:
+        raise NoMarketDataError(symbol, symbol, "akshare: no holdings for fund news")
+
+    blocks = []
+    for _, r in hold.head(top_n).iterrows():
+        code = bare_code(str(r["股票代码"]))
+        name = str(r.get("股票名称", "")).strip()
+        weight = r.get("占净值比例", "")
+        lines = [f"### {name}（{code}）占净值 {weight}%"]
+        try:
+            d = ak.stock_news_em(symbol=code)
+            if d is not None and not d.empty and "新闻标题" in d.columns:
+                for _, n in d.head(per_stock).iterrows():
+                    when = str(n.get("发布时间", "")).strip()
+                    title = str(n.get("新闻标题", "")).strip()
+                    lines.append(f"- [{when}] {title}")
+            else:
+                lines.append("- （暂无最新新闻）")
+        except Exception:  # noqa: BLE001 — akshare can raise for thin coverage
+            lines.append("- （暂无最新新闻）")
+        blocks.append("\n".join(lines))
+
+    return (
+        f"# 重仓股新闻摘要（基金 {symbol} 的前 {len(blocks)} 大重仓股）\n"
+        "# 来源：AKShare / 东方财富。基金的短期情绪很大程度由其重仓股驱动。\n\n"
+        + "\n\n".join(blocks)
+        + "\n"
+    )
+
+
+def get_fund_overview(symbol: str) -> str:
+    """Fund identity + strategy + fees + asset allocation + top holdings."""
+    import akshare as ak
+
+    basic = ak.fund_individual_basic_info_xq(symbol)
+    if basic is None or basic.empty:
+        raise NoMarketDataError(symbol, symbol, "akshare: no fund profile")
+    info = dict(zip(basic["item"], basic["value"]))
+
+    lines = [f"# Fund overview for {symbol} (China open-end fund)\n"]
+    profile_keys = [
+        "基金名称", "基金全称", "基金类型", "基金公司", "基金经理", "成立时间",
+        "最新规模", "基金评级", "业绩比较基准", "投资目标", "投资策略",
+    ]
+    lines.append("## 基本信息")
+    for k in profile_keys:
+        v = info.get(k)
+        if v not in (None, "") and not (isinstance(v, float) and pd.isna(v)):
+            lines.append(f"- {k}: {str(v).strip()}")
+
+    # Asset allocation (stocks / bonds / cash / other).
+    try:
+        alloc = ak.fund_individual_detail_hold_xq(symbol, date=_latest_fiscal_year())
+        if alloc is not None and not alloc.empty:
+            lines.append("\n## 资产配置")
+            lines.append(alloc.to_markdown(index=False))
+    except Exception:  # noqa: BLE001 — composition is best-effort
+        pass
+
+    # Top stock holdings.
+    try:
+        hold = ak.fund_portfolio_hold_em(symbol, date=_latest_fiscal_year())
+        if hold is not None and not hold.empty:
+            cols = [c for c in ["股票代码", "股票名称", "占净值比例", "持仓市值"] if c in hold.columns]
+            lines.append("\n## 前十大重仓股")
+            lines.append(hold.head(10)[cols].to_markdown(index=False))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Fees.
+    try:
+        fees = ak.fund_individual_detail_info_xq(symbol)
+        if fees is not None and not fees.empty:
+            lines.append("\n## 费用")
+            lines.append(fees.to_markdown(index=False))
+    except Exception:  # noqa: BLE001
+        pass
+
+    return "\n".join(lines) + "\n"

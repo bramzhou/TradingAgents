@@ -145,7 +145,7 @@ def build_instrument_context(
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`)."
     )
-    if is_cn_a_share(ticker):
+    if is_cn_a_share(ticker) and asset_type not in ("fund", "etf"):
         context += (
             " This is a China A-share listed in Shanghai/Shenzhen: prices and "
             "valuations are in CNY (¥), financials are reported in RMB, and "
@@ -153,11 +153,18 @@ def build_instrument_context(
             "data tools (do not expect US/yfinance coverage)."
         )
 
+    is_fund = asset_type in ("fund", "etf")
     details = []
     if identity:
         name = identity.get("company_name") or identity.get("name")
         if name:
-            details.append(f"{'Name' if is_crypto else 'Company'}: {name}")
+            label = "Fund" if is_fund else ("Name" if is_crypto else "Company")
+            details.append(f"{label}: {name}")
+        if is_fund:
+            if identity.get("company"):
+                details.append(f"Fund company: {identity['company']}")
+            if identity.get("category"):
+                details.append(f"Category: {identity['category']}")
         sector, industry = identity.get("sector"), identity.get("industry")
         if sector and industry:
             details.append(f"Business classification: {sector} / {industry}")
@@ -169,9 +176,10 @@ def build_instrument_context(
             details.append(f"Exchange: {identity['exchange']}")
 
     if details:
+        subject = "fund" if is_fund else "company"
         context += (
             f" Resolved identity: {'; '.join(details)}. "
-            "Do not substitute a different company or ticker unless a tool "
+            f"Do not substitute a different {subject} or ticker unless a tool "
             "result explicitly disproves this resolved identity."
         )
 
@@ -179,6 +187,14 @@ def build_instrument_context(
         context += (
             " Treat it as a crypto asset rather than a company, and do not "
             "assume company fundamentals are available."
+        )
+    if asset_type in ("fund", "etf"):
+        kind = "exchange-traded fund (ETF)" if asset_type == "etf" else "open-end fund"
+        context += (
+            f" Treat it as a China {kind} quoted by daily NAV in CNY, not a single "
+            "company: analyze it by its NAV trend/risk and what it holds (asset "
+            "allocation, top holdings, sector tilt, strategy, fees, manager, vs its "
+            "benchmark) — not single-company fundamentals."
         )
     return context
 

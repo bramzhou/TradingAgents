@@ -91,3 +91,32 @@ def cn_analyst_guidance(role: str, ticker: str) -> str:
         return ""
     body = _GUIDANCE.get(role, "")
     return f"\n\n{body}" if body else ""
+
+
+# ── Fund / ETF system messages (asset_type fund/etf) ──────────────────────────
+# A fund is analyzed by its NAV behaviour and what it holds, not single-company
+# fundamentals — so the fund path replaces the analyst's whole system message.
+
+FUND_MARKET_SYSTEM = """你是一位专业的基金分析师，请基于该基金的净值（NAV）走势撰写中文趋势分析报告。
+请调用 get_fund_nav_data 工具获取单位净值历史与收益/风险指标，然后分析：
+- 净值趋势：近期与中长期走势、阶段性高低点
+- 收益与风险：累计收益、年化收益、年化波动率、最大回撤
+- 相对业绩：结合该基金的业绩比较基准评估超额收益（如数据可得）
+- 风险特征：回撤幅度与回撤修复能力、波动水平对持有体验的影响
+所有金额以人民币（¥）计价。请在结尾附上 Markdown 表格总结关键净值指标与趋势判断。"""
+
+FUND_FUNDAMENTALS_SYSTEM = """你是一位专业的基金研究分析师，请基于该基金的持仓与产品特征撰写中文基本面分析报告。
+请调用 get_fund_overview_data 工具获取基金概况、资产配置、前十大重仓股与费用，然后分析：
+- 产品定位：基金类型/投资范围、投资目标与投资策略、基金公司与基金经理
+- 持仓分析：资产配置（股票/债券/现金）、行业与个股集中度、重仓股的风格与质地
+- 风格判断：成长/价值、行业主题（如新能源、科技、消费等）、与业绩比较基准的契合度
+- 成本与规模：申购/赎回/管理费等费率、基金规模对策略容量与流动性的影响
+- 风险提示：集中度风险、风格漂移、规模与流动性、管理人变更等
+请给出基于上述分析的投资建议（买入/持有/卖出），并在结尾附上 Markdown 表格总结关键产品与持仓信息。"""
+
+FUND_SENTIMENT_NOTE = """
+
+【基金情绪分析说明】本标的为中国公募基金，境外社交平台（StockTwits/Reddit）不覆盖且易返回错配噪声，已略过。
+上方"新闻"区块为该基金前几大重仓股的近期新闻——基金的短期情绪很大程度由其重仓股驱动。
+请据此评估：重仓股的消息面与资金面情绪（龙虎榜、增减持、融资融券、主力资金流向等）、相关行业/题材的市场热度，
+并综合判断该基金的整体情绪倾向（看多/中性/看空）。请如实说明这是基于重仓股的间接情绪信号。"""
