@@ -50,15 +50,15 @@ class ConditionalLogic:
         return "Msg Clear Fundamentals"
 
     def should_continue_debate(self, state: AgentState) -> str:
-        """Determine if debate should continue."""
+        """Determine if debate should continue.
 
-        if (
-            state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
+        Routes by turn parity (Bull speaks on odd counts, Bear on even) rather
+        than the response prefix, so the Bull/Bear label can be localized."""
+        count = state["investment_debate_state"]["count"]
+        if count >= 2 * self.max_debate_rounds:
             return "Research Manager"
-        if state["investment_debate_state"]["current_response"].startswith("Bull"):
-            return "Bear Researcher"
-        return "Bull Researcher"
+        # Bull just spoke (count is odd) → Bear next, and vice versa.
+        return "Bear Researcher" if count % 2 == 1 else "Bull Researcher"
 
     def should_continue_risk_analysis(self, state: AgentState) -> str:
         """Determine if risk analysis should continue."""

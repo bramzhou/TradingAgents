@@ -20,29 +20,44 @@ RATINGS_5_TIER: tuple[str, ...] = (
 
 _RATING_SET = {r.lower() for r in RATINGS_5_TIER}
 
-# Matches "Rating: X" / "rating - X" / "Rating: **X**" — tolerates markdown
-# bold wrappers and either a colon or hyphen separator.
-_RATING_LABEL_RE = re.compile(r"rating.*?[:\-][\s*]*(\w+)", re.IGNORECASE)
+# Chinese rating terms (the localized renders emit these) → canonical English.
+_RATING_ZH_TO_EN = {
+    "买入": "Buy", "增持": "Overweight", "持有": "Hold",
+    "减持": "Underweight", "卖出": "Sell",
+}
+
+# Matches "Rating: X" / "评级: X" / "Rating: **X**" — tolerates markdown bold,
+# a colon/hyphen (ASCII or full-width), and a Chinese or English rating term.
+_RATING_LABEL_RE = re.compile(
+    r"(?:rating|评级)\s*\**\s*[:：\-]\s*\**\s*([A-Za-z一-鿿]+)",
+    re.IGNORECASE,
+)
 
 
 def parse_rating(text: str, default: str = "Hold") -> str:
-    """Heuristically extract a 5-tier rating from prose text.
+    """Heuristically extract a 5-tier rating from prose text (English or Chinese).
 
-    Two-pass strategy:
-    1. Look for an explicit "Rating: X" label (tolerant of markdown bold).
-    2. Fall back to the first 5-tier rating word found anywhere in the text.
-
-    Returns a Title-cased rating string, or ``default`` if no rating word appears.
+    1. Look for an explicit "Rating: X" / "评级: X" label.
+    2. Fall back to the first English 5-tier word found anywhere.
+    3. Fall back to the first Chinese rating term found anywhere.
     """
     for line in text.splitlines():
         m = _RATING_LABEL_RE.search(line)
-        if m and m.group(1).lower() in _RATING_SET:
-            return m.group(1).capitalize()
+        if m:
+            tok = m.group(1)
+            if tok.lower() in _RATING_SET:
+                return tok.capitalize()
+            if tok in _RATING_ZH_TO_EN:
+                return _RATING_ZH_TO_EN[tok]
 
     for line in text.splitlines():
         for word in line.lower().split():
             clean = word.strip("*:.,")
             if clean in _RATING_SET:
                 return clean.capitalize()
+
+    for zh, en in _RATING_ZH_TO_EN.items():
+        if zh in text:
+            return en
 
     return default

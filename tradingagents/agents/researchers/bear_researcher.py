@@ -2,6 +2,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.dataflows.config import is_chinese_output
 
 
 def create_bear_researcher(llm):
@@ -48,7 +49,8 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
 
         response = llm.invoke(prompt)
 
-        argument = f"Bear Analyst: {response.content}"
+        label = "看跌研究员" if is_chinese_output() else "Bear Analyst"
+        argument = f"{label}: {response.content}"
 
         new_investment_debate_state = {
             "history": history + "\n" + argument,

@@ -37,5 +37,12 @@ def get_config() -> dict:
     return deepcopy(_config)
 
 
+def is_chinese_output() -> bool:
+    """True when the configured output language is non-English (Chinese), so
+    structured renders and debate labels can localize their fixed strings."""
+    lang = str(get_config().get("output_language", "English")).strip().lower()
+    return lang not in ("", "english", "en")
+
+
 # Initialize with default config
 initialize_config()

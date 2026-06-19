@@ -23,6 +23,47 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from tradingagents.dataflows.config import is_chinese_output
+
+# Localized fixed strings for the structured renders. Enum values keep the
+# English term in parentheses so parse_rating still recognises the decision.
+_RATING_ZH = {
+    "Buy": "买入", "Overweight": "增持", "Hold": "持有",
+    "Underweight": "减持", "Sell": "卖出",
+}
+_ACTION_ZH = {"Buy": "买入", "Hold": "持有", "Sell": "卖出"}
+_BAND_ZH = {
+    "Bullish": "看多", "Mildly Bullish": "偏多", "Neutral": "中性",
+    "Mixed": "分歧", "Mildly Bearish": "偏空", "Bearish": "看空",
+}
+_CONF_ZH = {"low": "低", "medium": "中", "high": "高"}
+_LABELS = {
+    "recommendation": ("Recommendation", "投资建议"),
+    "rating": ("Rating", "评级"),
+    "rationale": ("Rationale", "理由"),
+    "strategic": ("Strategic Actions", "策略行动"),
+    "action": ("Action", "操作"),
+    "reasoning": ("Reasoning", "理由"),
+    "entry": ("Entry Price", "入场价"),
+    "stop": ("Stop Loss", "止损价"),
+    "sizing": ("Position Sizing", "仓位安排"),
+    "summary": ("Executive Summary", "决策摘要"),
+    "thesis": ("Investment Thesis", "投资论点"),
+    "target": ("Price Target", "目标价"),
+    "horizon": ("Time Horizon", "时间跨度"),
+    "sentiment": ("Overall Sentiment", "整体情绪"),
+    "confidence": ("Confidence", "置信度"),
+}
+
+
+def _lbl(key: str) -> str:
+    en, zh = _LABELS[key]
+    return zh if is_chinese_output() else en
+
+
+def _enum_zh(value: str, mapping: dict[str, str]) -> str:
+    return mapping.get(value, value) if is_chinese_output() else value
+
 # ---------------------------------------------------------------------------
 # Shared rating types
 # ---------------------------------------------------------------------------
@@ -92,11 +133,11 @@ class ResearchPlan(BaseModel):
 def render_research_plan(plan: ResearchPlan) -> str:
     """Render a ResearchPlan to markdown for storage and the trader's prompt context."""
     return "\n".join([
-        f"**Recommendation**: {plan.recommendation.value}",
+        f"**{_lbl('recommendation')}**: {_enum_zh(plan.recommendation.value, _RATING_ZH)}",
         "",
-        f"**Rationale**: {plan.rationale}",
+        f"**{_lbl('rationale')}**: {plan.rationale}",
         "",
-        f"**Strategic Actions**: {plan.strategic_actions}",
+        f"**{_lbl('strategic')}**: {plan.strategic_actions}",
     ])
 
 
@@ -145,16 +186,16 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
     and any external code that greps for it.
     """
     parts = [
-        f"**Action**: {proposal.action.value}",
+        f"**{_lbl('action')}**: {_enum_zh(proposal.action.value, _ACTION_ZH)}",
         "",
-        f"**Reasoning**: {proposal.reasoning}",
+        f"**{_lbl('reasoning')}**: {proposal.reasoning}",
     ]
     if proposal.entry_price is not None:
-        parts.extend(["", f"**Entry Price**: {proposal.entry_price}"])
+        parts.extend(["", f"**{_lbl('entry')}**: {proposal.entry_price}"])
     if proposal.stop_loss is not None:
-        parts.extend(["", f"**Stop Loss**: {proposal.stop_loss}"])
+        parts.extend(["", f"**{_lbl('stop')}**: {proposal.stop_loss}"])
     if proposal.position_sizing:
-        parts.extend(["", f"**Position Sizing**: {proposal.position_sizing}"])
+        parts.extend(["", f"**{_lbl('sizing')}**: {proposal.position_sizing}"])
     parts.extend([
         "",
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
@@ -214,16 +255,16 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     parsers and the report writers already handle.
     """
     parts = [
-        f"**Rating**: {decision.rating.value}",
+        f"**{_lbl('rating')}**: {_enum_zh(decision.rating.value, _RATING_ZH)}",
         "",
-        f"**Executive Summary**: {decision.executive_summary}",
+        f"**{_lbl('summary')}**: {decision.executive_summary}",
         "",
-        f"**Investment Thesis**: {decision.investment_thesis}",
+        f"**{_lbl('thesis')}**: {decision.investment_thesis}",
     ]
     if decision.price_target is not None:
-        parts.extend(["", f"**Price Target**: {decision.price_target}"])
+        parts.extend(["", f"**{_lbl('target')}**: {decision.price_target}"])
     if decision.time_horizon:
-        parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+        parts.extend(["", f"**{_lbl('horizon')}**: {decision.time_horizon}"])
     return "\n".join(parts)
 
 
@@ -309,10 +350,13 @@ def render_sentiment_report(report: SentimentReport) -> str:
     narrative so the saved report is both human-readable and machine-parseable
     without regex.
     """
+    conf = report.confidence.lower()
+    conf_text = _CONF_ZH.get(conf, report.confidence.capitalize()) if is_chinese_output() \
+        else report.confidence.capitalize()
     return "\n".join([
-        f"**Overall Sentiment:** **{report.overall_band.value}** "
+        f"**{_lbl('sentiment')}:** **{_enum_zh(report.overall_band.value, _BAND_ZH)}** "
         f"(Score: {report.overall_score:.1f}/10)",
-        f"**Confidence:** {report.confidence.capitalize()}",
+        f"**{_lbl('confidence')}:** {conf_text}",
         "",
         report.narrative,
     ])
