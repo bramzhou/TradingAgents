@@ -93,7 +93,12 @@ def resolve_instrument_identity(ticker: str) -> dict:
     The symbol is normalized first (e.g. ``XAUUSD`` -> ``GC=F``) so identity
     resolves for the same instrument the price path actually fetches (#983).
     """
+    from tradingagents.dataflows.china import cn_identity, is_cn_a_share
     from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+    # A-shares have no yfinance coverage; resolve the name via Baostock instead.
+    if is_cn_a_share(ticker):
+        return cn_identity(ticker)
 
     try:
         info = yf.Ticker(normalize_symbol(ticker)).info or {}
@@ -131,6 +136,8 @@ def build_instrument_context(
     classification are injected so agents anchor to the real company rather
     than pattern-matching the price chart to a wrong one (#814).
     """
+    from tradingagents.dataflows.china import is_cn_a_share
+
     is_crypto = asset_type == "crypto"
     instrument_label = "asset" if is_crypto else "instrument"
     context = (
@@ -138,6 +145,13 @@ def build_instrument_context(
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`)."
     )
+    if is_cn_a_share(ticker):
+        context += (
+            " This is a China A-share listed in Shanghai/Shenzhen: prices and "
+            "valuations are in CNY (¥), financials are reported in RMB, and "
+            "policy/regulatory and retail-flow factors matter. Use the A-share "
+            "data tools (do not expect US/yfinance coverage)."
+        )
 
     details = []
     if identity:

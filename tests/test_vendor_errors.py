@@ -86,8 +86,10 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
             out = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(out, "YF")
 
-    def test_sole_unconfigured_vendor_surfaces_the_error(self):
-        # With no fallback, the not-configured condition must surface (not vanish).
+    def test_sole_unconfigured_vendor_degrades_to_a_sentinel(self):
+        # With no fallback, an unconfigured-only method surfaces the condition as
+        # an instructive sentinel (so the firm runs keyless and the agent reports
+        # the signal as unavailable) rather than crashing the whole run.
         set_config({"data_vendors": {"core_stock_apis": "alpha_vantage"}})
 
         def _unconfigured(*a, **k):
@@ -97,8 +99,10 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
             interface.VENDOR_METHODS,
             {"get_stock_data": {"alpha_vantage": _unconfigured}},
             clear=False,
-        ), self.assertRaises(AlphaVantageNotConfiguredError):
-            interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+        ):
+            out = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+        self.assertIn("DATA_SOURCE_NOT_CONFIGURED", out)
+        self.assertIn("no key", out)  # the underlying cause is surfaced, not vanished
 
 
 if __name__ == "__main__":

@@ -44,6 +44,14 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
+# China A-share data sources (Baostock price, AKShare fundamentals, Tushare
+# fallback). Optional so the core install stays lean:
+# pip install -e ".[china]".
+china = [
+    "akshare>=1.12",
+    "baostock>=0.8.8",
+    "tushare>=1.2.89",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"

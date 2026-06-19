@@ -11,6 +11,18 @@ from .alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
+from .china import (
+    get_akshare_balance_sheet,
+    get_akshare_cashflow,
+    get_akshare_fundamentals,
+    get_akshare_income_statement,
+    get_akshare_news,
+    get_akshare_stock_data,
+    get_baostock_stock_data,
+    get_tushare_fundamentals,
+    get_tushare_stock_data,
+    is_cn_a_share,
+)
 from .config import get_config
 from .errors import (
     NoMarketDataError,
@@ -82,7 +94,24 @@ VENDOR_LIST = [
     "fred",
     "polymarket",
     "alpha_vantage",
+    "baostock",
+    "tushare",
+    "akshare",
 ]
+
+# China A-share fallback chains, by method. Used when the symbol is a 6-digit
+# A-share code (overrides the configured vendor for US/global markets). Baostock
+# leads for price — it is keyless and reliable where AKShare's price endpoint is
+# blocked; AKShare leads for fundamentals (its statement endpoint works).
+CN_VENDOR_CHAINS = {
+    "get_stock_data": ["baostock", "tushare", "akshare"],
+    "get_indicators": ["baostock"],
+    "get_fundamentals": ["akshare", "tushare"],
+    "get_balance_sheet": ["akshare"],
+    "get_income_statement": ["akshare"],
+    "get_cashflow": ["akshare"],
+    "get_news": ["akshare"],
+}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
@@ -90,33 +119,44 @@ VENDOR_METHODS = {
     "get_stock_data": {
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+        "baostock": get_baostock_stock_data,
+        "tushare": get_tushare_stock_data,
+        "akshare": get_akshare_stock_data,
     },
-    # technical_indicators
+    # technical_indicators — the CN path computes the same stockstats indicators
+    # from Baostock-sourced OHLCV (load_ohlcv is A-share aware).
     "get_indicators": {
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
+        "baostock": get_stock_stats_indicators_window,
     },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
+        "akshare": get_akshare_fundamentals,
+        "tushare": get_tushare_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
+        "akshare": get_akshare_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
+        "akshare": get_akshare_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
+        "akshare": get_akshare_income_statement,
     },
     # news_data
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "akshare": get_akshare_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
@@ -184,6 +224,14 @@ def route_to_vendor(method: str, *args, **kwargs):
             )
     else:
         vendor_chain = all_available_vendors
+
+    # China A-share symbols (6-digit codes) route to the CN vendor chain
+    # regardless of the configured US/global vendor, with Baostock→Tushare→AKShare
+    # fallback. Only methods whose first positional arg is the symbol qualify.
+    if args and method in CN_VENDOR_CHAINS and is_cn_a_share(args[0]):
+        cn_chain = [v for v in CN_VENDOR_CHAINS[method] if v in VENDOR_METHODS[method]]
+        if cn_chain:
+            vendor_chain = cn_chain
 
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None
