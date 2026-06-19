@@ -187,6 +187,7 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None
+    not_configured: VendorNotConfiguredError | None = None
     for vendor in vendor_chain:
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
@@ -198,6 +199,8 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue
         except VendorNotConfiguredError as e:
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
+            if not_configured is None:
+                not_configured = e
             if first_error is None:
                 first_error = e  # Surface it if no other vendor can serve the call.
             continue
@@ -237,6 +240,18 @@ def route_to_vendor(method: str, *args, **kwargs):
             f"any configured vendor{reason}. The symbol may be invalid, delisted, "
             f"not covered, or the vendor returned stale data. Do not estimate or "
             f"fabricate values — report that data is unavailable for this symbol."
+        )
+
+    # Every vendor that could serve this call is merely unconfigured (a missing
+    # optional API key, e.g. FRED for macro indicators). Degrade to an
+    # instructive sentinel instead of crashing the whole run, so the firm needs
+    # no data keys beyond the LLM — the agent reports the signal as unavailable
+    # and moves on.
+    if not_configured is not None:
+        return (
+            f"DATA_SOURCE_NOT_CONFIGURED: '{method}' is unavailable because no "
+            f"vendor is configured for it ({not_configured}). Treat this signal as "
+            f"unavailable — do not estimate or fabricate values."
         )
 
     # No vendor returned data and none reported clean "no data" — surface the
