@@ -266,6 +266,62 @@ def get_fund_holdings_news(symbol: str, top_n: int = 5, per_stock: int = 3) -> s
     )
 
 
+def _is_etf_feeder(name: str, full_name: str, strategy: str) -> bool:
+    """An ETF feeder fund (联接基金) holds the target ETF rather than stocks, so
+    its latest disclosure is dominated by the ETF and its direct stock weights are
+    tiny — the real exposure is the ETF's constituents."""
+    blob = f"{name} {full_name} {strategy}"
+    return "联接" in blob or "目标ETF" in blob
+
+
+def _target_etf_label(name: str) -> str:
+    """The target ETF's name, derived from the feeder's own name (everything up to
+    and including 'ETF', dropping the 联接 share-class tail). Reliable — no lookup."""
+    if "ETF联接" in name:
+        return name.split("ETF联接")[0] + "ETF"
+    if "ETF" in name and "联接" in name:
+        return name.split("ETF")[0] + "ETF"
+    return name.split("联接")[0] if "联接" in name else ""
+
+
+def _lookthrough_holdings(symbol: str):
+    """For a feeder fund, the most recent quarter of the fund's own disclosure that
+    still shows real look-through weights (top holding ≥ 2%) — before it shifted to
+    holding the target ETF and its direct stock weights went tiny. Returns
+    (quarter_label, top10_df) or None."""
+    import re
+
+    import akshare as ak
+
+    y = int(_latest_fiscal_year())
+    for year in (str(y), str(y - 1), str(y - 2)):
+        try:
+            h = _t(
+                lambda yr=year: ak.fund_portfolio_hold_em(symbol=symbol, date=yr),
+                "fund_portfolio_hold_em",
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if h is None or h.empty or "占净值比例" not in h.columns:
+            continue
+        if "季度" not in h.columns:
+            if float(h["占净值比例"].max()) >= 2.0:
+                return ("", h.head(10))
+            continue
+        # Quarters with meaningful weights, most recent first.
+        cand = []
+        for q in h["季度"].unique():
+            sub = h[h["季度"] == q]
+            if float(sub["占净值比例"].max()) >= 2.0:
+                m = re.search(r"(\d)\s*季度", str(q))
+                cand.append((int(m.group(1)) if m else 0, str(q), sub))
+        if cand:
+            cand.sort(key=lambda t: t[0], reverse=True)
+            _, q, sub = cand[0]
+            return (q, sub.head(10))
+    return None
+
+
 def get_fund_overview(symbol: str) -> str:
     """Fund identity + strategy + fees + asset allocation + top holdings.
 
@@ -315,18 +371,37 @@ def get_fund_overview(symbol: str) -> str:
     except Exception:  # noqa: BLE001 — composition is best-effort
         pass
 
-    # Top stock holdings.
-    try:
-        hold = _t(
-            lambda: ak.fund_portfolio_hold_em(symbol, date=_latest_fiscal_year()),
-            "fund_portfolio_hold_em",
+    # Top stock holdings. For an ETF feeder fund the latest disclosure is mostly
+    # the target ETF (其他), so the direct stock weights are tiny — surface the
+    # look-through holdings (the target ETF's constituents) instead.
+    name = info.get("基金名称") or fund_name_type(symbol)[0]
+    feeder = _is_etf_feeder(name, info.get("基金全称", ""), info.get("投资策略", ""))
+    lookthrough = _lookthrough_holdings(symbol) if feeder else None
+    if lookthrough is not None:
+        quarter, hold = lookthrough
+        etf = _target_etf_label(name)
+        suffix = f"（{quarter}）" if quarter else ""
+        title = f"穿透至目标ETF（{etf}）的前十大重仓股{suffix}" if etf \
+            else f"穿透持仓·前十大重仓股{suffix}"
+        cols = [c for c in ["股票代码", "股票名称", "占净值比例", "持仓市值"] if c in hold.columns]
+        lines.append(f"\n## {title}")
+        lines.append(
+            "> 本基金为ETF联接基金，主要通过持有目标ETF获得指数敞口；"
+            "下表为穿透至成分股的实际持仓权重（非本基金当期直接持股的小额残余）。"
         )
-        if hold is not None and not hold.empty:
-            cols = [c for c in ["股票代码", "股票名称", "占净值比例", "持仓市值"] if c in hold.columns]
-            lines.append("\n## 前十大重仓股")
-            lines.append(hold.head(10)[cols].to_markdown(index=False))
-    except Exception:  # noqa: BLE001
-        pass
+        lines.append(hold.head(10)[cols].to_markdown(index=False))
+    else:
+        try:
+            hold = _t(
+                lambda: ak.fund_portfolio_hold_em(symbol, date=_latest_fiscal_year()),
+                "fund_portfolio_hold_em",
+            )
+            if hold is not None and not hold.empty:
+                cols = [c for c in ["股票代码", "股票名称", "占净值比例", "持仓市值"] if c in hold.columns]
+                lines.append("\n## 前十大重仓股")
+                lines.append(hold.head(10)[cols].to_markdown(index=False))
+        except Exception:  # noqa: BLE001
+            pass
 
     # Fees.
     try:
