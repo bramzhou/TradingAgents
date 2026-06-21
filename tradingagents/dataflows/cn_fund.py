@@ -14,6 +14,7 @@ import concurrent.futures
 import datetime as dt
 import functools
 import math
+import threading
 
 import pandas as pd
 
@@ -23,19 +24,35 @@ from .errors import NoMarketDataError
 # timeout of their own), which would stall the whole analyst run. Cap each call.
 _AK_TIMEOUT = 30  # seconds
 
+# All AKShare calls run on ONE dedicated, serialized worker thread. Some AKShare
+# endpoints decrypt responses with mini_racer (V8), whose isolates are not
+# thread-safe: running them concurrently or from different threads crashes the
+# process natively — uncatchable by try/except. Pinning every call to a single
+# thread keeps V8 single-threaded; the lock serializes calls and makes the
+# timeout-driven worker replacement atomic.
+_ak_lock = threading.Lock()
+_ak_executor: concurrent.futures.ThreadPoolExecutor | None = None
+
 
 def _t(call, label: str = "akshare call"):
-    """Run a blocking akshare call with a hard wall-clock timeout, raising
-    ``TimeoutError`` (callers degrade to a sentinel) instead of hanging. The
-    worker thread is abandoned, not awaited, so a hung request can't block us."""
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    fut = ex.submit(call)
-    try:
-        return fut.result(timeout=_AK_TIMEOUT)
-    except concurrent.futures.TimeoutError as e:
-        raise TimeoutError(f"{label} timed out after {_AK_TIMEOUT}s") from e
-    finally:
-        ex.shutdown(wait=False)
+    """Run a blocking akshare call on the shared worker thread with a hard
+    timeout, raising ``TimeoutError`` (callers degrade to a sentinel) instead of
+    hanging. On timeout the wedged worker is abandoned and replaced so a hung
+    request can't block every later call."""
+    global _ak_executor
+    with _ak_lock:
+        if _ak_executor is None:
+            _ak_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="akshare"
+            )
+        ex = _ak_executor
+        fut = ex.submit(call)
+        try:
+            return fut.result(timeout=_AK_TIMEOUT)
+        except concurrent.futures.TimeoutError as e:
+            _ak_executor = None
+            ex.shutdown(wait=False)
+            raise TimeoutError(f"{label} timed out after {_AK_TIMEOUT}s") from e
 
 
 def _latest_fiscal_year() -> str:
